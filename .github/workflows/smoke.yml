@@ -61,6 +61,40 @@ jobs:
           "Still running" | Tee-Object -Append shots\info.txt
           Stop-Process -Id $p.Id -Force
 
+      - name: Install from the latest release, launch, uninstall
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          gh release download --repo $env:GITHUB_REPOSITORY --pattern NotchZero-Setup.exe --dir setup
+          $log = "shots\install.txt"
+          $setup = Start-Process setup\NotchZero-Setup.exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/TASKS=startup" -PassThru -Wait
+          "Setup exit code: $($setup.ExitCode)" | Tee-Object -Append $log
+          $exe = Join-Path $env:LOCALAPPDATA "Programs\NotchZero\NotchZero.exe"
+          "Installed exe exists: $(Test-Path $exe)" | Tee-Object -Append $log
+          $run = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name NotchZero -ErrorAction SilentlyContinue).NotchZero
+          "Run key: $run" | Tee-Object -Append $log
+          $lnk = Get-ChildItem "$env:APPDATA\Microsoft\Windows\Start Menu\Programs" -Filter "NotchZero*.lnk" -Recurse -ErrorAction SilentlyContinue
+          "Start menu shortcut: $($lnk.FullName)" | Tee-Object -Append $log
+
+          $p = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 8
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          $g = [System.Drawing.Graphics]::FromImage($bmp)
+          $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $bmp.Save("shots\5-installed.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          "Installed app running: $(-not $p.HasExited)" | Tee-Object -Append $log
+
+          $un = Start-Process (Join-Path $env:LOCALAPPDATA "Programs\NotchZero\unins000.exe") -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -PassThru -Wait
+          Start-Sleep -Seconds 3
+          "Uninstall exit code: $($un.ExitCode)" | Tee-Object -Append $log
+          "Exe after uninstall: $(Test-Path $exe)" | Tee-Object -Append $log
+          $run2 = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name NotchZero -ErrorAction SilentlyContinue).NotchZero
+          "Run key after uninstall: '$run2'" | Tee-Object -Append $log
+          "Still running after uninstall: $((Get-Process NotchZero -ErrorAction SilentlyContinue) -ne $null)" | Tee-Object -Append $log
+
       - name: Save screenshots to the smoke-results branch
         if: always()
         shell: pwsh
