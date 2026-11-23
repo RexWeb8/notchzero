@@ -1,0 +1,14 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>NotchZero demo player</title>
+<audio id="a" src="tone.wav" loop autoplay></audio>
+<script>
+  const a = document.getElementById('a');
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: 'Midnight Drive',
+    artist: 'NotchZero Demo',
+    album: 'Demo',
+    artwork: [{ src: 'cover.png', sizes: '512x512', type: 'image/png' }]
+  });
+  a.play().then(() => { document.title = 'PLAYING'; }).catch(e => { document.title = 'ERR ' + e; });
+</script>

@@ -1,18 +1,22 @@
-name: Build Windows installer
+name: Build
 
 on:
   push:
     branches: [main]
     paths-ignore:
+      - '**.md'
+      - 'docs/**'
       - '.github/workflows/smoke.yml'
-      - 'README.md'
   workflow_dispatch:
 
 permissions:
   contents: write
 
+env:
+  VERSION: 1.1.${{ github.run_number }}
+
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,7 +26,7 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Publish NotchZero.exe
-        run: dotnet publish NotchZero.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:Version=1.0.${{ github.run_number }} -o publish
+        run: dotnet publish windows/NotchZero.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:Version=${{ env.VERSION }} -o windows/publish
 
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
@@ -32,18 +36,68 @@ jobs:
         run: |
           $iscc = Get-ChildItem "C:\Program Files (x86)\Inno Setup*\ISCC.exe", "C:\Program Files\Inno Setup*\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $iscc) { throw "ISCC.exe not found" }
-          & $iscc.FullName "/DAppVersion=1.0.${{ github.run_number }}" NotchZero.iss
+          & $iscc.FullName "/DAppVersion=$env:VERSION" windows\NotchZero.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
 
       - uses: actions/upload-artifact@v4
         with:
-          name: NotchZero-Setup
-          path: Output/NotchZero-Setup.exe
+          name: windows
+          path: windows/Output/NotchZero-Setup.exe
 
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
+  macos:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build NotchZero.app (Apple silicon + Intel)
+        working-directory: macos
+        run: |
+          xcodebuild -version
+          xcodebuild -project NotchZero.xcodeproj -target NotchZero -configuration Release \
+            SYMROOT="$PWD/build" OBJROOT="$PWD/build/obj" \
+            ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            build | tail -n 40
+          test -d build/Release/NotchZero.app
+
+      - name: Package DMG
+        working-directory: macos
+        run: |
+          rm -rf dmg && mkdir dmg
+          cp -R build/Release/NotchZero.app dmg/
+          codesign --force --deep --sign - dmg/NotchZero.app
+          ln -s /Applications dmg/Applications
+          for i in 1 2 3; do
+            hdiutil create -volname NotchZero -srcfolder dmg -ov -format UDZO NotchZero-macOS.dmg && break
+            sleep 5
+          done
+          test -f NotchZero-macOS.dmg
+
+      - uses: actions/upload-artifact@v4
         with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: NotchZero 1.0.${{ github.run_number }}
-          files: Output/NotchZero-Setup.exe
+          name: macos
+          path: macos/NotchZero-macOS.dmg
+
+  release:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: NotchZero ${{ env.VERSION }}
+          body: |
+            **Windows 10 / 11:** download `NotchZero-Setup.exe`
+            **macOS 26 Tahoe or later:** download `NotchZero-macOS.dmg`
+
+            Step-by-step install guide with pictures: see the README on the main page.
+          files: |
+            dist/NotchZero-Setup.exe
+            dist/NotchZero-macOS.dmg
           make_latest: true

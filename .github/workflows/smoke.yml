@@ -1,6 +1,6 @@
 name: Smoke test
 
-# Launches NotchZero on a Windows runner, hovers the island and saves screenshots.
+# Runs NotchZero on Windows and macOS runners and saves screenshots to the smoke-results branch.
 on:
   workflow_dispatch:
 
@@ -8,7 +8,7 @@ permissions:
   contents: write
 
 jobs:
-  smoke:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,91 +18,166 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Publish
-        run: dotnet publish NotchZero.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+        run: dotnet publish windows/NotchZero.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
 
-      - name: Run and capture
-        shell: pwsh
-        run: |
-          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
-          New-Item -ItemType Directory -Force shots | Out-Null
-          $dir = Join-Path $env:LOCALAPPDATA "NotchZero"
-          New-Item -ItemType Directory -Force $dir | Out-Null
-          '{ "Mascot": "Cat", "ShowMascotWhenIdle": true, "ShowSongPeek": true, "AutoZone": false, "Zone": "WLY01", "FirstRunDone": true }' | Set-Content (Join-Path $dir "settings.json")
-
-          function Shot([string]$name) {
-            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
-            $g = [System.Drawing.Graphics]::FromImage($bmp)
-            $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
-            $bmp.Save("shots\$name.png", [System.Drawing.Imaging.ImageFormat]::Png)
-            $g.Dispose(); $bmp.Dispose()
-          }
-
-          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-          "Screen: $($bounds.Width)x$($bounds.Height)" | Tee-Object shots\info.txt
-          [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point 200, 500
-
-          $p = Start-Process -FilePath publish\NotchZero.exe -PassThru
-          Start-Sleep -Seconds 15
-          Shot "1-closed"
-
-          [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point ([int]($bounds.Width / 2)), 10
-          Start-Sleep -Seconds 3
-          Shot "2-open"
-          Start-Sleep -Seconds 2
-          Shot "3-open-later"
-
-          [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point 200, 600
-          Start-Sleep -Seconds 3
-          Shot "4-closed-again"
-
-          Copy-Item (Join-Path $dir "log.txt") shots\ -ErrorAction SilentlyContinue
-          if ($p.HasExited) { "EXITED code $($p.ExitCode)" | Tee-Object -Append shots\info.txt; exit 1 }
-          "Still running" | Tee-Object -Append shots\info.txt
-          Stop-Process -Id $p.Id -Force
-
-      - name: Install from the latest release, launch, uninstall
+      - name: Screenshots
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
-          gh release download --repo $env:GITHUB_REPOSITORY --pattern NotchZero-Setup.exe --dir setup
-          $log = "shots\install.txt"
-          $setup = Start-Process setup\NotchZero-Setup.exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/TASKS=startup" -PassThru -Wait
-          "Setup exit code: $($setup.ExitCode)" | Tee-Object -Append $log
-          $exe = Join-Path $env:LOCALAPPDATA "Programs\NotchZero\NotchZero.exe"
-          "Installed exe exists: $(Test-Path $exe)" | Tee-Object -Append $log
-          $run = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name NotchZero -ErrorAction SilentlyContinue).NotchZero
-          "Run key: $run" | Tee-Object -Append $log
-          $lnk = Get-ChildItem "$env:APPDATA\Microsoft\Windows\Start Menu\Programs" -Filter "NotchZero*.lnk" -Recurse -ErrorAction SilentlyContinue
-          "Start menu shortcut: $($lnk.FullName)" | Tee-Object -Append $log
+          Add-Type @"
+          using System;
+          using System.Runtime.InteropServices;
+          public static class W {
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool SystemParametersInfo(int a, int b, string c, int d);
+            [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, int flags, int extra);
+            [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+            public static void Poke() { keybd_event(0x10, 0, 0, 0); keybd_event(0x10, 0, 2, 0); }
+          }
+          "@
+          $shots = "shots"
+          New-Item -ItemType Directory -Force $shots | Out-Null
+          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $cx = [int]($bounds.Width / 2)
+          function Shot([string]$name) {
+            $bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+            $bmp.Save("$shots\win-$name.png", [System.Drawing.Imaging.ImageFormat]::Png)
+            $g.Dispose(); $bmp.Dispose()
+          }
+          $dir = Join-Path $env:LOCALAPPDATA "NotchZero"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          function Settings([string]$mascot) {
+            @{ Mascot = $mascot; ShowMascotWhenIdle = $true; ShowSongPeek = $true; AutoZone = $false; Zone = "WLY01"; FirstRunDone = $true } |
+              ConvertTo-Json | Set-Content (Join-Path $dir "settings.json")
+          }
+          function StartApp { $script:app = Start-Process -FilePath publish\NotchZero.exe -PassThru; Start-Sleep -Seconds 7 }
+          function StopApp { Stop-Process -Id $script:app.Id -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1 }
 
-          $p = Start-Process -FilePath $exe -PassThru
-          Start-Sleep -Seconds 8
-          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
-          $g = [System.Drawing.Graphics]::FromImage($bmp)
-          $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
-          $bmp.Save("shots\5-installed.png", [System.Drawing.Imaging.ImageFormat]::Png)
-          "Installed app running: $(-not $p.HasExited)" | Tee-Object -Append $log
+          "Screen: $($bounds.Width)x$($bounds.Height)" | Tee-Object "$shots\win-info.txt"
+          [W]::SystemParametersInfo(20, 0, (Resolve-Path docs\demo\wallpaper.png).Path, 3) | Out-Null
+          (New-Object -ComObject Shell.Application).MinimizeAll()
+          Start-Sleep -Seconds 2
+          [W]::SetCursorPos(150, 600) | Out-Null
 
-          $un = Start-Process (Join-Path $env:LOCALAPPDATA "Programs\NotchZero\unins000.exe") -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -PassThru -Wait
+          # The five mascots
+          foreach ($m in "Cat", "Rabbit", "Dragon", "Owl", "MouseDeer") {
+            Settings $m
+            StartApp
+            [W]::Poke()
+            Start-Sleep -Seconds 1
+            Shot "mascot-$m"
+            StopApp
+          }
+
+          # Music from a demo page in Chrome (Windows media controls)
+          Settings "Cat"
+          StartApp
+          $server = Start-Process python -ArgumentList "-m", "http.server", "8123", "--directory", "docs/demo" -PassThru -WindowStyle Hidden
+          Start-Sleep -Seconds 2
+          $chromeExe = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+          $chrome = Start-Process $chromeExe -ArgumentList "--autoplay-policy=no-user-gesture-required", "--no-first-run", "--no-default-browser-check", "--user-data-dir=$env:TEMP\nzchrome", "--window-position=-2400,0", "http://localhost:8123/demo.html" -PassThru
+          for ($i = 1; $i -le 12; $i++) { Start-Sleep -Milliseconds 700; [W]::Poke(); Shot ("music-{0:00}" -f $i) }
+          [W]::SetCursorPos($cx, 6) | Out-Null
           Start-Sleep -Seconds 3
-          "Uninstall exit code: $($un.ExitCode)" | Tee-Object -Append $log
-          "Exe after uninstall: $(Test-Path $exe)" | Tee-Object -Append $log
-          $run2 = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name NotchZero -ErrorAction SilentlyContinue).NotchZero
-          "Run key after uninstall: '$run2'" | Tee-Object -Append $log
-          "Still running after uninstall: $((Get-Process NotchZero -ErrorAction SilentlyContinue) -ne $null)" | Tee-Object -Append $log
+          Shot "panel-music"
+          [W]::SetCursorPos(150, 600) | Out-Null
+          Start-Sleep -Seconds 2
+          Shot "after-panel"
+          StopApp
+          Get-Process chrome -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+          Copy-Item (Join-Path $dir "log.txt") "$shots\win-log.txt" -ErrorAction SilentlyContinue
 
-      - name: Save screenshots to the smoke-results branch
+          # Installer
+          gh release download --repo $env:GITHUB_REPOSITORY --pattern NotchZero-Setup.exe --dir setup
+          $setupExe = (Resolve-Path setup\NotchZero-Setup.exe).Path
+          Set-Content -Path $setupExe -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3"
+          Start-Process explorer.exe -ArgumentList $setupExe
+          Start-Sleep -Seconds 8
+          Shot "setup-0"
+          $smart = Get-Process smartscreen -ErrorAction SilentlyContinue
+          "SmartScreen process: $($smart -ne $null)" | Tee-Object -Append "$shots\win-info.txt"
+          if (-not (Get-Process "NotchZero-Setup*" -ErrorAction SilentlyContinue)) {
+            $smart | Stop-Process -Force -ErrorAction SilentlyContinue
+            Remove-Item -Path $setupExe -Stream Zone.Identifier -ErrorAction SilentlyContinue
+            Start-Process $setupExe
+            Start-Sleep -Seconds 5
+          }
+          $ws = New-Object -ComObject WScript.Shell
+          $ws.AppActivate("Setup - NotchZero") | Out-Null
+          Start-Sleep -Seconds 1
+          Shot "setup-1"
+          [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+          Start-Sleep -Seconds 2
+          Shot "setup-2"
+          [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+          Start-Sleep -Seconds 15
+          $ws.AppActivate("Setup - NotchZero") | Out-Null
+          Start-Sleep -Seconds 1
+          Shot "setup-3"
+          [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+          Start-Sleep -Seconds 8
+          Shot "setup-4"
+
+      - uses: actions/upload-artifact@v4
         if: always()
-        shell: pwsh
+        with:
+          name: shots-windows
+          path: shots/
+
+  macos:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        working-directory: macos
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@users.noreply.github.com"
-          git checkout --orphan smoke-results
-          git rm -rf --cached . | Out-Null
-          git add -f shots
-          git commit -m "Smoke test screenshots ($env:GITHUB_RUN_NUMBER)"
-          git push -f origin smoke-results
+          xcodebuild -project NotchZero.xcodeproj -target NotchZero -configuration Release \
+            SYMROOT="$PWD/build" OBJROOT="$PWD/build/obj" ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual build | tail -n 20
+
+      - name: Screenshots
+        run: |
+          mkdir -p shots
+          system_profiler SPDisplaysDataType | grep -i -E "resolution|display type" > shots/mac-info.txt || true
+          defaults write com.farisfadzli.NotchZero showKapasWhenIdle -bool true
+          open macos/build/Release/NotchZero.app
+          sleep 12
+          screencapture -x shots/mac-1.png || echo "screencapture failed" >> shots/mac-info.txt
+          brew install cliclick >/dev/null 2>&1 || true
+          BOUNDS=$(osascript -e 'tell application "Finder" to get bounds of window of desktop' 2>/dev/null || echo "0, 0, 1920, 1080")
+          echo "Desktop bounds: $BOUNDS" >> shots/mac-info.txt
+          W=$(echo "$BOUNDS" | awk -F', ' '{print $3}')
+          cliclick "m:$((W / 2)),4" || echo "cliclick failed" >> shots/mac-info.txt
+          sleep 3
+          screencapture -x shots/mac-2-open.png || true
+          pgrep -x NotchZero >/dev/null && echo "NotchZero running" >> shots/mac-info.txt || echo "NotchZero NOT running" >> shots/mac-info.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shots-macos
+          path: shots/
+
+  collect:
+    needs: [windows, macos]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: shots
+          merge-multiple: true
+
+      - name: Push screenshots to the smoke-results branch
+        working-directory: shots
+        run: |
+          git init -q
+          git checkout -q -b smoke-results
+          git add -A
+          git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com commit -qm "Smoke screenshots ${{ github.run_number }}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" smoke-results

@@ -1,6 +1,16 @@
+# Windows
 bin/
 obj/
 publish/
 Output/
 *.user
 .vs/
+# macOS
+macos/build/
+macos/NotchZero.app
+macos/dmg/
+*.dmg
+build.log
+build-issues.log
+xcuserdata/
+.DS_Store
