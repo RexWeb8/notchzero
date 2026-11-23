@@ -1,0 +1,46 @@
+name: Build Windows installer
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish NotchZero.exe
+        run: dotnet publish NotchZero.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:Version=1.0.${{ github.run_number }} -o publish
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = Get-ChildItem "C:\Program Files (x86)\Inno Setup*\ISCC.exe", "C:\Program Files\Inno Setup*\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $iscc) { throw "ISCC.exe not found" }
+          & $iscc.FullName "/DAppVersion=1.0.${{ github.run_number }}" NotchZero.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NotchZero-Setup
+          path: Output/NotchZero-Setup.exe
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: NotchZero 1.0.${{ github.run_number }}
+          files: Output/NotchZero-Setup.exe
+          make_latest: true
