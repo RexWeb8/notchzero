@@ -25,11 +25,17 @@
 
 NotchZero sits at the top centre of your screen: in the notch on a MacBook, and as a small black pill on Windows.
 
-| | |
-|---|---|
-| <img src="docs/images/island-music.png" width="300" alt="Island with music bars and the cat mascot"> | **While music plays**, white bars bounce on the left and the mascot dances on the right. |
-| <img src="docs/images/island-peek.png" width="300" alt="Song peek with artwork, title and artist"> | **When a new song starts**, the island peeks out for a few seconds with the artwork and title. |
-| <img src="docs/images/island-prayer.png" width="300" alt="Island showing the next prayer, Maghrib 7:00"> | **The next prayer** and a countdown when it's close. At prayer time you get a quiet notification (no azan) and your music pauses for a few seconds, then carries on. |
+**While music plays**, white bars bounce on the left and the mascot dances on the right.
+
+<p align="center"><img src="docs/images/island-music.png" width="360" alt="Island with music bars and the cat mascot"></p>
+
+**When a new song starts**, the island peeks out for a few seconds with the artwork and title.
+
+<p align="center"><img src="docs/images/island-peek.png" width="520" alt="Song peek with artwork, title and artist"></p>
+
+**The next prayer** shows up with a countdown when it's close. At prayer time you get a quiet notification (no azan), and your music pauses for a few seconds, then carries on.
+
+<p align="center"><img src="docs/images/island-prayer.png" width="360" alt="Island showing the next prayer, Maghrib 7:00"></p>
 
 **Hover the island** (or click it) to open the full panel:
 
