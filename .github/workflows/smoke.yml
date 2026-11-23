@@ -33,7 +33,9 @@ jobs:
             [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool SystemParametersInfo(int a, int b, string c, int d);
             [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, int flags, int extra);
             [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+            [DllImport("user32.dll")] public static extern void mouse_event(int flags, int dx, int dy, int data, int extra);
             public static void Poke() { keybd_event(0x10, 0, 0, 0); keybd_event(0x10, 0, 2, 0); }
+            public static void Click() { mouse_event(0x02, 0, 0, 0, 0); mouse_event(0x04, 0, 0, 0, 0); }
           }
           "@
           $shots = "shots"
@@ -72,13 +74,11 @@ jobs:
             StopApp
           }
 
-          # Music from a demo page in Chrome (Windows media controls)
+          # Music: a demo app reports a song to Windows' media controls (no audio needed)
+          dotnet build docs/demo/FakePlayer/FakePlayer.csproj -c Release -o fakeplayer | Out-Null
           Settings "Cat"
           StartApp
-          $server = Start-Process python -ArgumentList "-m", "http.server", "8123", "--directory", "docs/demo" -PassThru -WindowStyle Hidden
-          Start-Sleep -Seconds 2
-          $chromeExe = "C:\Program Files\Google\Chrome\Application\chrome.exe"
-          $chrome = Start-Process $chromeExe -ArgumentList "--autoplay-policy=no-user-gesture-required", "--no-first-run", "--no-default-browser-check", "--user-data-dir=$env:TEMP\nzchrome", "--window-position=-2400,0", "http://localhost:8123/demo.html" -PassThru
+          $fake = Start-Process fakeplayer\FakePlayer.exe -ArgumentList '"Midnight Drive"', '"NotchZero Demo"', 'docs\demo\cover.png', '60' -PassThru -WindowStyle Hidden
           for ($i = 1; $i -le 12; $i++) { Start-Sleep -Milliseconds 700; [W]::Poke(); Shot ("music-{0:00}" -f $i) }
           [W]::SetCursorPos($cx, 6) | Out-Null
           Start-Sleep -Seconds 3
@@ -87,40 +87,52 @@ jobs:
           Start-Sleep -Seconds 2
           Shot "after-panel"
           StopApp
-          Get-Process chrome -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-          Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+          Stop-Process -Id $fake.Id -Force -ErrorAction SilentlyContinue
           Copy-Item (Join-Path $dir "log.txt") "$shots\win-log.txt" -ErrorAction SilentlyContinue
 
-          # Installer
+          # Installer, as a downloaded file (so SmartScreen shows), clicked through with UI Automation
+          Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+          function Find([string]$name) {
+            $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, $name)
+            return [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+          }
+          function Press([string]$name) {
+            $el = Find $name
+            if (-not $el) { "Not found: $name" | Tee-Object -Append "$shots\win-info.txt"; return $false }
+            $pattern = $null
+            if ($el.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) { $pattern.Invoke() }
+            else {
+              $r = $el.Current.BoundingRectangle
+              [W]::SetCursorPos([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2)) | Out-Null
+              [W]::Click()
+            }
+            "Pressed: $name" | Tee-Object -Append "$shots\win-info.txt"
+            return $true
+          }
+          Remove-Item (Join-Path $dir "settings.json") -ErrorAction SilentlyContinue
           gh release download --repo $env:GITHUB_REPOSITORY --pattern NotchZero-Setup.exe --dir setup
           $setupExe = (Resolve-Path setup\NotchZero-Setup.exe).Path
           Set-Content -Path $setupExe -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3"
           Start-Process explorer.exe -ArgumentList $setupExe
           Start-Sleep -Seconds 8
-          Shot "setup-0"
-          $smart = Get-Process smartscreen -ErrorAction SilentlyContinue
-          "SmartScreen process: $($smart -ne $null)" | Tee-Object -Append "$shots\win-info.txt"
-          if (-not (Get-Process "NotchZero-Setup*" -ErrorAction SilentlyContinue)) {
-            $smart | Stop-Process -Force -ErrorAction SilentlyContinue
-            Remove-Item -Path $setupExe -Stream Zone.Identifier -ErrorAction SilentlyContinue
-            Start-Process $setupExe
-            Start-Sleep -Seconds 5
-          }
-          $ws = New-Object -ComObject WScript.Shell
-          $ws.AppActivate("Setup - NotchZero") | Out-Null
-          Start-Sleep -Seconds 1
+          Shot "smartscreen-1"
+          Press "More info" | Out-Null
+          Start-Sleep -Seconds 2
+          Shot "smartscreen-2"
+          Press "Run anyway" | Out-Null
+          Start-Sleep -Seconds 6
           Shot "setup-1"
-          [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+          Press "Next" | Out-Null
           Start-Sleep -Seconds 2
           Shot "setup-2"
-          [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
-          Start-Sleep -Seconds 15
-          $ws.AppActivate("Setup - NotchZero") | Out-Null
-          Start-Sleep -Seconds 1
+          Press "Install" | Out-Null
+          Start-Sleep -Seconds 20
           Shot "setup-3"
-          [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
-          Start-Sleep -Seconds 8
+          Press "Finish" | Out-Null
+          Start-Sleep -Seconds 3
           Shot "setup-4"
+          Start-Sleep -Seconds 3
+          Shot "setup-5"
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -156,6 +168,28 @@ jobs:
           sleep 3
           screencapture -x shots/mac-2-open.png || true
           pgrep -x NotchZero >/dev/null && echo "NotchZero running" >> shots/mac-info.txt || echo "NotchZero NOT running" >> shots/mac-info.txt
+          pkill -x NotchZero || true
+
+          # The DMG window (drag to Applications)
+          mkdir -p dmg && cp -R macos/build/Release/NotchZero.app dmg/ && ln -s /Applications dmg/Applications
+          hdiutil create -volname NotchZero -srcfolder dmg -ov -format UDZO NotchZero-macOS.dmg >/dev/null
+          open NotchZero-macOS.dmg
+          sleep 6
+          screencapture -x shots/mac-3-dmg.png || true
+          hdiutil detach /Volumes/NotchZero -force >/dev/null 2>&1 || true
+
+          # Gatekeeper, as for a downloaded app
+          echo "Gatekeeper before: $(spctl --status 2>&1)" >> shots/mac-info.txt
+          sudo spctl --global-enable >/dev/null 2>&1 || sudo spctl --master-enable >/dev/null 2>&1 || true
+          echo "Gatekeeper after: $(spctl --status 2>&1)" >> shots/mac-info.txt
+          mkdir -p ~/Downloads/gk && cp -R macos/build/Release/NotchZero.app ~/Downloads/gk/
+          xattr -w com.apple.quarantine "0081;$(printf %x $(date +%s));Safari;" ~/Downloads/gk/NotchZero.app
+          open ~/Downloads/gk/NotchZero.app || true
+          sleep 6
+          screencapture -x shots/mac-4-gatekeeper.png || true
+          open "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension" || true
+          sleep 6
+          screencapture -x shots/mac-5-privacy.png || true
 
       - uses: actions/upload-artifact@v4
         if: always()
