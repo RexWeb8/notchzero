@@ -4,6 +4,9 @@ name: Smoke test
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   smoke:
     runs-on: windows-latest
@@ -58,8 +61,14 @@ jobs:
           "Still running" | Tee-Object -Append shots\info.txt
           Stop-Process -Id $p.Id -Force
 
-      - uses: actions/upload-artifact@v4
+      - name: Save screenshots to the smoke-results branch
         if: always()
-        with:
-          name: smoke-shots
-          path: shots/
+        shell: pwsh
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git checkout --orphan smoke-results
+          git rm -rf --cached . | Out-Null
+          git add -f shots
+          git commit -m "Smoke test screenshots ($env:GITHUB_RUN_NUMBER)"
+          git push -f origin smoke-results
